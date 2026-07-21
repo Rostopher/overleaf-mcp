@@ -13,11 +13,11 @@ The three existing Overleaf MCPs ([mjyoo2/overleafmcp](https://github.com/mjyoo2
 
 The [`overleaf-workshop`](https://github.com/overleaf-workshop/overleaf-workshop) VSCode extension already uses Overleaf's Socket.IO API rather than Git, but doesn't yet emit tracked changes ([issue #94](https://github.com/overleaf-workshop/overleaf-workshop/issues/94)).
 
-`overleaf-mcp` solves both: a minimal Socket.IO 0.9 client over `fetch` + `ws@8`, plus the `meta.tc` ID seed on `applyOtUpdate` that flips Overleaf's server-side `RangesTracker` into track-changes mode.
+`overleaf-mcp` solves both: a minimal Socket.IO 0.9 client over `fetch` + `ws@8`, plus the `meta.tc` ID seed on `applyOtUpdate` that flips Overleaf's server-side `RangesTracker` into track-changes mode. Overleaf strictly validates outbound update metadata: clients send only `meta.tc`; fields such as `source` and `user_id` are added by the server to inbound updates.
 
 ## Status
 
-Working end-to-end against `overleaf.com` — 16 tools, tracked-changes edits and review-panel comments both verified. Published on npm as [`@netique/overleaf-mcp`](https://www.npmjs.com/package/@netique/overleaf-mcp).
+Working end-to-end against `overleaf.com` — 17 tools, tracked-changes edits and review-panel comments both verified. Published on npm as [`@netique/overleaf-mcp`](https://www.npmjs.com/package/@netique/overleaf-mcp).
 
 ## Tools
 
@@ -28,12 +28,12 @@ Working end-to-end against `overleaf.com` — 16 tools, tracked-changes edits an
 | `open_project` | Joins a project's real-time session and caches its file tree. Returns rich metadata: `root_doc_path`, `compiler`, `spell_check_language`, `public_access_level`, owner + members (with privileges), and whether track-changes is on for your user. |
 | `list_files` | Lists the file tree of the open project (cached, no network). Filter by `kind` and `path_contains`. |
 | `read_file` | Reads a doc (returns text + OT version + a summary of tracked changes / comments) or a binary file (base64 + MIME). `path` is optional — defaults to the project's root doc. |
-| `edit_file` | Replaces a doc's contents. Computes a minimal diff via `diff-match-patch`, submits it as an OT operation, and adds `meta.tc` so the edit lands as a pending suggestion in the Review panel by default. Pass `track: "off"` to write directly or `track: "auto"` to honor the project's track-changes setting. `path` is optional — defaults to the project's root doc. |
-| `find_and_replace` | Surgical edit: replace one occurrence (or all, with `replace_all: true`) of `old_string` with `new_string` without re-emitting the rest of the doc. Cheaper in tokens than `edit_file` for targeted changes and avoids whitespace drift from re-emitting surrounding text. By default `old_string` must be unique; ambiguous matches return a list of line:col locations so you can extend the match. Same `track` defaults and OT path as `edit_file`, so it lands as a pending suggestion in the Review panel. |
+| `edit_file` | Replaces a doc's contents. Computes a minimal diff via `diff-match-patch`, submits it as an OT operation, and adds `meta.tc` to request a pending Review-panel suggestion by default. It then re-reads the doc ranges and reports `tracked: true` only when the suggestion is confirmed; an expected-but-unconfirmed suggestion is a tool error. Pass `track: "off"` to request a direct edit or `track: "auto"` to honor the project's setting. `path` is optional — defaults to the root doc. |
+| `find_and_replace` | Surgical edit: replace one occurrence (or all, with `replace_all: true`) without re-emitting the rest of the doc. Ambiguous matches return line:col locations. It shares `edit_file`'s OT, tracking defaults, and post-edit range verification. |
 | `list_tracked_changes` | Enumerates every pending tracked-change suggestion across the open project, with author name + email, doc path, op kind (insert/delete), position, op text, change_id. Filter by `author_email`, `author_id_endswith`, `path_contains`, `kind`, `text_contains`, `limit`. |
 | `accept_changes` | Accepts one or more tracked changes by `change_id` (from `list_tracked_changes`). Multi-doc groups are batched automatically. Irreversible. |
 | `reject_changes` | Rejects one or more tracked changes by `change_id`. Implemented as `applyOtUpdate` with the inverse op + `u:true` (same pathway Overleaf's web client uses). Irreversible. |
-| `compile` | Triggers an Overleaf compile and returns a unified summary: `status`, `built_cleanly` (true iff PDF + zero LaTeX errors), `error_count`, `warning_count`, `first_errors` (sample), `output_files`, timings. Already fetches and parses `output.log` inline — no extra `read_log` call needed for the happy path. Pass `root_doc`, `draft`, `stop_on_first_error` to control. |
+| `compile` | Triggers an Overleaf compile and returns a unified summary: `status`, `built_cleanly` (true iff PDF + successfully fetched log + zero LaTeX errors), `verification_complete`, `log_available`, `error_count`, `warning_count`, `first_errors` (sample), output files, and timings. Log-fetch failures fail closed instead of reporting a clean build. Pass `root_doc`, `draft`, `stop_on_first_error` to control. |
 | `read_log` | Returns the full `output.log` from the most recent compile, with `!`-prefixed error lines surfaced at the top. Use when `compile`'s inline summary isn't enough context. |
 | `list_comments` | Lists review-panel comment threads with doc path, quoted text, author, latest-message preview. Supports `include_resolved`, `path_contains`, `full`. |
 | `read_comment_thread` | Returns the full message history of one thread. |
@@ -159,6 +159,8 @@ Any Chromium-family browser works — Chrome, Brave, Edge, Arc, Chromium. If `fi
 **`Could not find ol-csrfToken meta tag`** — your Overleaf server doesn't expose the CSRF meta tag (rare; mostly very old Community Edition). Set `OL_CSRF` explicitly.
 
 **Edits land but don't show up as tracked suggestions** — confirm track-changes is on for *your user* on this project (Menu → Settings → Track Changes → "For me" or "For everyone"). `open_project` reports the detected state under `track_changes_on_for_me`. To force tracking regardless, pass `track: "on"` to `edit_file`.
+
+**An edit returned `tracking_status: "not_found"` or `"indeterminate"`** — the text operation may already have landed, but the server did not provide a matching Review-panel range that the MCP could confirm. Stop automated editing and inspect the document in Overleaf before retrying. `tracked: true` is reserved for confirmed ranges.
 
 **Compile succeeds but `read_log` returns 404** — Overleaf needs `?clsiserverid=...` to route to the right CLSI worker; we add this automatically from the previous compile response. If you see this, the previous compile may not have completed; re-run `compile` and then `read_log`.
 

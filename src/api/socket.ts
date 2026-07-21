@@ -29,7 +29,21 @@ export interface OtUpdate {
   v: number;
   lastV?: number;
   hash?: string;
-  meta?: { source: string; ts: number; user_id: string; tc?: string };
+  // Overleaf validates client-supplied metadata strictly. `source` and
+  // `user_id` are added by the server to inbound updates; outbound clients
+  // only send the tracked-change seed.
+  meta?: { tc: string };
+}
+
+export function buildOtUpdate(
+  doc: string,
+  op: NonNullable<OtUpdate["op"]>,
+  v: number,
+  trackedChangeSeed?: string,
+): OtUpdate {
+  const update: OtUpdate = { doc, op, v };
+  if (trackedChangeSeed) update.meta = { tc: trackedChangeSeed };
+  return update;
 }
 
 interface JoinDocResult {

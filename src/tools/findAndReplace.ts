@@ -38,7 +38,7 @@ const Schema = z.object({
     .enum(TRACK_MODES)
     .default("on")
     .describe(
-      "Tracked-changes mode. This is a client *request*, not a guarantee — when the project has `track_changes_on_for_me: true` (visible in `open_project`'s response), the server forces tracking regardless of what you pass, and the tool response will report `tracked: true, track_overridden: true`. Don't tell the user 'this will be untracked' without first checking that flag from `open_project`. Modes: 'on' (default) — explicitly request tracking; edit lands as a pending suggestion in Overleaf's Review panel. 'off' — request a direct untracked write (may be overridden as above). 'auto' — track iff the project's tc setting says so.",
+      "Tracked-changes mode. This is a client request; the response reports `tracking_status` after checking post-edit ranges and sets `tracked:true` only when confirmed. When `track_changes_on_for_me` is true, the server may override `track:'off'`. Modes: 'on' (default) — request and verify a pending Review-panel suggestion. 'off' — request a direct write. 'auto' — follow the project's per-user setting.",
     ),
   strict_version: z
     .boolean()
@@ -85,7 +85,7 @@ export function registerFindAndReplace(server: McpServer): void {
       description:
         "Replace one occurrence — or all, with `replace_all: true` — of `old_string` with `new_string` in a doc, without re-emitting the rest of the file. " +
         "By default `old_string` must be unique; ambiguous matches are returned with line:column locations so you can extend the match. " +
-        "Submits the minimal OT operation through the same pathway as `edit_file`, so by default it lands as a pending suggestion in Overleaf's Review panel (track:'on'). " +
+        "Submits the minimal OT operation through the same pathway as `edit_file`; by default it requests a pending suggestion (track:'on') and verifies the resulting Review-panel range. " +
         "If `path` is omitted, defaults to the project's root doc. " +
         "USE WHEN: a SINGLE targeted edit (one typo, one label rename, one heading change) in a large doc — saves tokens vs. re-emitting the body and avoids accidental whitespace drift. " +
         "AVOID FOR BATCH WORK: for multiple substitutions (e.g. converting many words, applying a style guide across a chapter) prefer ONE `edit_file` call with all changes computed client-side. " +
@@ -163,11 +163,41 @@ export function registerFindAndReplace(server: McpServer): void {
               ops_applied: ops.length,
               version_before: cached.version,
               version_after: r.versionAfter,
-              tracked: r.serverWillTrack,
+              tracked: r.trackingStatus === "confirmed",
+              tracking_expected: r.trackingExpected,
+              tracking_status: r.trackingStatus,
+              tracked_change_ids: r.trackedChangeIds,
               track_mode: args.track,
               track_overridden: r.trackOverridden,
               verification_failed: true,
               silent_no_op: true,
+            },
+          };
+        }
+
+        if (r.trackingVerificationFailed) {
+          return {
+            content: [{ type: "text", text:
+              `Replaced ${replacements} occurrence(s) in '${entity.path}', but Track Changes verification failed. ` +
+              `${r.trackingNote} Doc version ${cached.version} -> ${r.versionAfter}. ` +
+              `Stop automated edits and inspect Overleaf before continuing.`,
+            }],
+            isError: true,
+            structuredContent: {
+              path: entity.path,
+              doc_id: entity.id,
+              replacements,
+              ops_applied: ops.length,
+              version_before: cached.version,
+              version_after: r.versionAfter,
+              tracked: false,
+              tracking_expected: r.trackingExpected,
+              tracking_status: r.trackingStatus,
+              tracked_change_ids: r.trackedChangeIds,
+              track_mode: args.track,
+              track_overridden: r.trackOverridden,
+              tracking_verification_failed: true,
+              verified: r.v ? r.v.matchesExpected : false,
             },
           };
         }
@@ -186,7 +216,10 @@ export function registerFindAndReplace(server: McpServer): void {
             ops_applied: ops.length,
             version_before: cached.version,
             version_after: r.versionAfter,
-            tracked: r.serverWillTrack,
+            tracked: r.trackingStatus === "confirmed",
+            tracking_expected: r.trackingExpected,
+            tracking_status: r.trackingStatus,
+            tracked_change_ids: r.trackedChangeIds,
             track_mode: args.track,
             track_overridden: r.trackOverridden,
             verified: r.v ? r.v.matchesExpected : false,

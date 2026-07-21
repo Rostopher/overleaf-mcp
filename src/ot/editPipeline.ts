@@ -5,13 +5,14 @@
 // freshness checks, OT submit, post-edit verify, cache sync, response notes —
 // is identical and lives here.
 
-import { applyOtUpdate, getActiveSocket, type OtUpdate } from "../api/socket.js";
+import { applyOtUpdate, buildOtUpdate } from "../api/socket.js";
 import { getIdentity } from "../session/identity.js";
-import { ensureDocLoaded, updateDoc, type CachedDoc } from "../session/docCache.js";
+import { ensureDocLoaded, invalidateDoc, updateDoc, type CachedDoc } from "../session/docCache.js";
 import { findByPath, getActiveProject, type ActiveProject } from "../session/activeProject.js";
 import type { FlatEntity } from "../api/projectTypes.js";
 import type { ShareJsOp } from "./diff.js";
 import { generateIdSeed, resolveTracking, type TrackMode } from "./trackedChanges.js";
+import { assessTracking, type DocRanges, type TrackingStatus } from "./trackingVerification.js";
 import { checkBaseline, verifyEdit, type PostEditVerify } from "./verify.js";
 
 export type EditToolResponse = {
@@ -70,7 +71,7 @@ export async function prepareBaseline(
   }
   if (opts.strict_version) {
     const bc = await checkBaseline(entity.id, cached.version);
-    updateDoc(entity.id, bc.serverText, bc.serverVersion);
+    updateDoc(entity.id, bc.serverText, bc.serverVersion, bc.serverRanges);
     if (bc.stale) {
       return {
         ok: false,
@@ -87,7 +88,7 @@ export async function prepareBaseline(
         },
       };
     }
-    cached = { docId: entity.id, text: bc.serverText, version: bc.serverVersion };
+    cached = { docId: entity.id, text: bc.serverText, version: bc.serverVersion, ranges: bc.serverRanges };
   }
   return { ok: true, cached };
 }
@@ -104,7 +105,7 @@ export interface SubmitOpts {
 
 export interface SubmitResult {
   shouldTrack: boolean;
-  serverWillTrack: boolean;
+  trackingExpected: boolean;
   trackOverridden: boolean;
   optimisticVersion: number;
   versionAfter: number;
@@ -114,6 +115,9 @@ export interface SubmitResult {
   v: PostEditVerify | undefined;
   verifyError: string | undefined;
   silentNoOp: boolean;
+  trackingStatus: TrackingStatus;
+  trackedChangeIds: string[];
+  trackingVerificationFailed: boolean;
 }
 
 // Build + emit the OT update, run post-edit verification, sync the cache to
@@ -122,23 +126,11 @@ export interface SubmitResult {
 // the caller's responsibility.
 export async function submitAndVerify(opts: SubmitOpts): Promise<SubmitResult> {
   const identity = await getIdentity();
-  const sock = getActiveSocket();
-  const { shouldTrack, serverWillTrack, trackOverridden } = resolveTracking(opts.track, opts.ap.trackChangesOnForMe);
-  const meta: NonNullable<OtUpdate["meta"]> = {
-    source: sock?.publicId ?? "overleaf-mcp",
-    ts: Date.now(),
-    user_id: identity.userId,
-  };
-  if (shouldTrack) meta.tc = generateIdSeed();
-  const update: OtUpdate = { doc: opts.entity.id, op: opts.ops, v: opts.cached.version, meta };
+  const { shouldTrack, trackingExpected, trackOverridden } = resolveTracking(opts.track, opts.ap.trackChangesOnForMe);
+  const tcSeed = shouldTrack ? generateIdSeed() : undefined;
+  const update = buildOtUpdate(opts.entity.id, opts.ops, opts.cached.version, tcSeed);
   await applyOtUpdate(opts.entity.id, update);
   const optimisticVersion = opts.cached.version + 1;
-  const trackingNote = serverWillTrack
-    ? (trackOverridden
-        ? "Submitted as a tracked change — `track:\"off\"` was overridden because the project has track_changes_on_for_me. The edit lands as a pending suggestion in Overleaf's Review panel."
-        : "Submitted as tracked changes — should appear as a pending suggestion in Overleaf's Review panel.")
-    : "Submitted as a direct edit (no tracking).";
-
   let v: PostEditVerify | undefined;
   let verifyError: string | undefined;
   try {
@@ -146,13 +138,29 @@ export async function submitAndVerify(opts: SubmitOpts): Promise<SubmitResult> {
   } catch (e) {
     verifyError = e instanceof Error ? e.message : String(e);
   }
-  // Sync cache to the server's actual state — even on verify failure we want
-  // the next edit to diff against reality rather than our optimistic prediction.
-  if (v) updateDoc(opts.entity.id, v.serverText, v.serverVersion);
-  else updateDoc(opts.entity.id, opts.expectedText, optimisticVersion);
+  // Sync cache only to confirmed server state. If verification itself failed,
+  // discard the optimistic baseline so the next read/edit must re-join the doc.
+  if (v) updateDoc(opts.entity.id, v.serverText, v.serverVersion, v.serverRanges);
+  else invalidateDoc(opts.entity.id);
 
   const silentNoOp = Boolean(v?.silentNoOp);
   const versionAfter = v ? v.serverVersion : optimisticVersion;
+  const tracking = assessTracking({
+    expected: trackingExpected,
+    seed: tcSeed,
+    userId: identity.userId,
+    ops: opts.ops,
+    beforeRanges: opts.cached.ranges as DocRanges | undefined,
+    afterRanges: v?.serverRanges as DocRanges | undefined,
+  });
+  const trackingVerificationFailed = trackingExpected && tracking.status !== "confirmed";
+  const trackingNote = tracking.status === "confirmed"
+    ? `Tracked change confirmed in Overleaf's Review panel (${tracking.changeIds.length} range(s)).${trackOverridden ? " The server overrode `track:\"off\"` because track_changes_on_for_me is enabled." : ""}`
+    : tracking.status === "not_found"
+      ? " WARNING: the text edit landed, but no matching tracked-change range was found. Treat this as an unreviewed direct edit and inspect Overleaf immediately."
+      : tracking.status === "indeterminate"
+        ? " WARNING: the text edit landed, but tracked-change status could not be verified because post-edit ranges were unavailable. Inspect Overleaf before continuing."
+        : "Submitted as a direct edit (tracking was not requested or expected).";
   const concurrentNote = v?.hadConcurrentWritesAfter
     ? ` Note: server is at v${v.serverVersion} (> optimistic v${optimisticVersion}) — another writer landed updates after this edit; your op is in but the doc has moved on.`
     : !v?.matchesExpected && v
@@ -161,9 +169,12 @@ export async function submitAndVerify(opts: SubmitOpts): Promise<SubmitResult> {
   const verifySkippedNote = verifyError ? ` (post-edit verification skipped: ${verifyError})` : "";
 
   return {
-    shouldTrack, serverWillTrack, trackOverridden,
+    shouldTrack, trackingExpected, trackOverridden,
     optimisticVersion, versionAfter,
     trackingNote, concurrentNote, verifySkippedNote,
     v, verifyError, silentNoOp,
+    trackingStatus: tracking.status,
+    trackedChangeIds: tracking.changeIds,
+    trackingVerificationFailed,
   };
 }

@@ -83,7 +83,7 @@ export function registerReadFile(server: McpServer): void {
           // (concurrent edit) between read and edit, the resulting op will be
           // sent with a stale `v` and the server will reject or transform —
           // either is correct behavior, but we no longer silently overwrite.
-          updateDoc(entity.id, text, doc.version);
+          updateDoc(entity.id, text, doc.version, doc.ranges);
           const ranges = doc.ranges as { changes?: unknown[]; comments?: unknown[] } | undefined | null;
           const changeCount = Array.isArray(ranges?.changes) ? ranges.changes.length : 0;
           const commentCount = Array.isArray(ranges?.comments) ? ranges.comments.length : 0;

@@ -16,6 +16,7 @@ export interface BaselineCheck {
   stale: boolean;
   serverVersion: number;
   serverText: string;
+  serverRanges: unknown;
 }
 
 // Re-fetch and compare to the cached version. Use before `applyOtUpdate` when
@@ -27,12 +28,14 @@ export async function checkBaseline(docId: string, cachedVersion: number): Promi
     stale: fresh.version !== cachedVersion,
     serverVersion: fresh.version,
     serverText: fresh.docLines.join("\n"),
+    serverRanges: fresh.ranges,
   };
 }
 
 export interface PostEditVerify {
   serverVersion: number;
   serverText: string;
+  serverRanges: unknown;
   // The server's text after our op is identical to what it was before. Our
   // ops were either rejected, transformed to a no-op, or applied somewhere
   // that didn't change the visible text. This is the user-reported bug.
@@ -59,6 +62,7 @@ export async function verifyEdit(
   return {
     serverVersion: fresh.version,
     serverText,
+    serverRanges: fresh.ranges,
     silentNoOp: serverText === preEditText,
     matchesExpected: serverText === expectedText,
     hadConcurrentWritesAfter: fresh.version > expectedVersion,

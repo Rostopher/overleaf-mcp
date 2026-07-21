@@ -5,12 +5,11 @@ import { asJson, olGet, olPostJson, expectOk } from "../api/http.js";
 import { docPathById, getActiveProject } from "../session/activeProject.js";
 import type { RangesResponse, DocRange } from "../api/commentTypes.js";
 import type { MemberEntity } from "../api/projectTypes.js";
-import { applyOtUpdate, getActiveSocket, joinDoc, type OtUpdate } from "../api/socket.js";
-import { getIdentity } from "../session/identity.js";
+import { applyOtUpdate, buildOtUpdate, joinDoc } from "../api/socket.js";
 import { generateIdSeed } from "../ot/trackedChanges.js";
 import { logger } from "../util/logger.js";
 
-interface FlatChange {
+export interface FlatChange {
   change_id: string;
   doc_id: string;
   doc_path?: string;
@@ -97,32 +96,24 @@ async function postAccept(projectId: string, docId: string, changeIds: string[])
 
 const RejectSchema = AcceptSchema;
 
-async function rejectViaOt(docId: string, changes: FlatChange[]): Promise<void> {
+export function buildRejectOps(changes: FlatChange[]): Array<{ p: number; i?: string; d?: string; u: true }> {
   // Build inverse ops. Reverse-sort by position so applying earlier ops doesn't
   // shift the positions of later ones (matches Overleaf's frontend reject-changes.ts comment).
   const ordered = [...changes].sort((a, b) => b.position - a.position);
-  const ops = ordered.map((c) =>
+  return ordered.map((c) =>
     c.kind === "insert"
-      ? { p: c.position, d: c.text, u: true }  // undo a tracked insert -> delete the text
-      : { p: c.position, i: c.text, u: true }  // undo a tracked delete -> re-mark as present
+      ? { p: c.position, d: c.text, u: true as const }  // undo a tracked insert -> delete the text
+      : { p: c.position, i: c.text, u: true as const }  // undo a tracked delete -> re-mark as present
   );
-  const identity = await getIdentity();
-  const sock = getActiveSocket();
+}
+
+async function rejectViaOt(docId: string, changes: FlatChange[]): Promise<void> {
+  const ops = buildRejectOps(changes);
   // We don't keep a cache for arbitrary docs (only ones the agent has edited),
   // so fetch the current version straight from the server before sending the
   // inverse op.
   const fresh = await joinDoc(docId);
-  const update: OtUpdate = {
-    doc: docId,
-    op: ops,
-    v: fresh.version,
-    meta: {
-      source: sock?.publicId ?? "overleaf-mcp",
-      ts: Date.now(),
-      user_id: identity.userId,
-      tc: generateIdSeed(),
-    },
-  };
+  const update = buildOtUpdate(docId, ops, fresh.version, generateIdSeed());
   await applyOtUpdate(docId, update);
 }
 

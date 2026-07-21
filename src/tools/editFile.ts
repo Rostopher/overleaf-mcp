@@ -24,7 +24,7 @@ const Schema = z.object({
     .enum(TRACK_MODES)
     .default("on")
     .describe(
-      "Tracked-changes mode. This is a client *request*, not a guarantee — when the project has `track_changes_on_for_me: true` (visible in `open_project`'s response), the server forces tracking regardless of what you pass, and the tool response will report `tracked: true, track_overridden: true`. Don't tell the user 'this will be untracked' without first checking that flag from `open_project`. Modes: 'on' (default) — explicitly request tracking; edit lands as a pending suggestion in Overleaf's Review panel, the agent-collaborator-friendly choice. 'off' — request a direct untracked write (may be overridden as above). 'auto' — track iff the project's tc setting says so.",
+      "Tracked-changes mode. This is a client request; the response reports `tracking_status` after checking post-edit ranges and sets `tracked:true` only when confirmed. When `track_changes_on_for_me` is true, the server may override `track:'off'`. Modes: 'on' (default) — request and verify a pending Review-panel suggestion. 'off' — request a direct write. 'auto' — follow the project's per-user setting.",
     ),
   strict_version: z
     .boolean()
@@ -42,7 +42,7 @@ export function registerEditFile(server: McpServer): void {
       description:
         "Replaces the contents of a doc by computing a minimal diff and submitting it as an OT operation " +
         "over the live Socket.IO connection. The change lands in the web editor in real time. " +
-        "By default the edit appears as a pending suggestion in the Review panel (track:'on'); pass track:'off' to write directly. " +
+        "By default the tool requests a pending suggestion in the Review panel (track:'on') and verifies the resulting range; pass track:'off' to request a direct write. " +
         "If `path` is omitted, defaults to the project's root doc. " +
         "Only .tex / .bib / .md / similar text docs are editable — binary files are not.",
       inputSchema: Schema.shape,
@@ -87,11 +87,42 @@ export function registerEditFile(server: McpServer): void {
               chars_deleted: deletedChars,
               version_before: cached.version,
               version_after: r.versionAfter,
-              tracked: r.serverWillTrack,
+              tracked: r.trackingStatus === "confirmed",
+              tracking_expected: r.trackingExpected,
+              tracking_status: r.trackingStatus,
+              tracked_change_ids: r.trackedChangeIds,
               track_mode: args.track,
               track_overridden: r.trackOverridden,
               verification_failed: true,
               silent_no_op: true,
+            },
+          };
+        }
+
+        if (r.trackingVerificationFailed) {
+          return {
+            content: [{ type: "text", text:
+              `Applied ${ops.length} op(s) to '${entity.path}' (+${insertedChars} / -${deletedChars} chars), ` +
+              `but Track Changes verification failed. ${r.trackingNote} ` +
+              `Doc version ${cached.version} -> ${r.versionAfter}. Stop automated edits and inspect Overleaf before continuing.`,
+            }],
+            isError: true,
+            structuredContent: {
+              path: entity.path,
+              doc_id: entity.id,
+              ops_applied: ops.length,
+              chars_inserted: insertedChars,
+              chars_deleted: deletedChars,
+              version_before: cached.version,
+              version_after: r.versionAfter,
+              tracked: false,
+              tracking_expected: r.trackingExpected,
+              tracking_status: r.trackingStatus,
+              tracked_change_ids: r.trackedChangeIds,
+              track_mode: args.track,
+              track_overridden: r.trackOverridden,
+              tracking_verification_failed: true,
+              verified: r.v ? r.v.matchesExpected : false,
             },
           };
         }
@@ -114,7 +145,10 @@ export function registerEditFile(server: McpServer): void {
             chars_deleted: deletedChars,
             version_before: cached.version,
             version_after: r.versionAfter,
-            tracked: r.serverWillTrack,
+            tracked: r.trackingStatus === "confirmed",
+            tracking_expected: r.trackingExpected,
+            tracking_status: r.trackingStatus,
+            tracked_change_ids: r.trackedChangeIds,
             track_mode: args.track,
             track_overridden: r.trackOverridden,
             verified: r.v ? r.v.matchesExpected : false,

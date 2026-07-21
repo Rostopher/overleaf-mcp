@@ -22,18 +22,17 @@ export function generateIdSeed(): string {
 export const TRACK_MODES = ["auto", "on", "off"] as const;
 export type TrackMode = typeof TRACK_MODES[number];
 
-// Resolve what the SERVER will do given the caller's `track` request and the
-// project's per-user setting. `serverWillTrack` is what we report in `tracked`;
-// `trackOverridden` flags the specific case where the caller said "off" but
-// the project's `track_changes_on_for_me: true` forced tracking anyway.
+// Resolve whether tracking is expected from the caller's request and the
+// project's per-user setting. This is not server confirmation; editPipeline
+// verifies the post-edit ranges before reporting `tracked:true`.
 export function resolveTracking(
   track: TrackMode,
   trackChangesOnForMe: boolean,
-): { shouldTrack: boolean; serverWillTrack: boolean; trackOverridden: boolean } {
+): { shouldTrack: boolean; trackingExpected: boolean; trackOverridden: boolean } {
   const shouldTrack = track === "on" ? true : track === "off" ? false : trackChangesOnForMe;
   return {
     shouldTrack,
-    serverWillTrack: shouldTrack || trackChangesOnForMe,
+    trackingExpected: shouldTrack || trackChangesOnForMe,
     trackOverridden: track === "off" && trackChangesOnForMe,
   };
 }

@@ -6,7 +6,7 @@ import { docPathById, getActiveProject } from "../session/activeProject.js";
 import type { CommentThread, ThreadsByIdResponse, RangesResponse } from "../api/commentTypes.js";
 import { logger } from "../util/logger.js";
 
-interface EnrichedThread {
+export interface EnrichedThread {
   thread_id: string;
   doc_path?: string;
   doc_id?: string;
@@ -20,14 +20,12 @@ interface EnrichedThread {
   full_thread?: CommentThread;
 }
 
-async function fetchThreadsEnriched(projectId: string, docPaths: Map<string, string>): Promise<EnrichedThread[]> {
-  const [threadsRes, rangesRes] = await Promise.all([
-    olGet(`project/${projectId}/threads`),
-    olGet(`project/${projectId}/ranges`),
-  ]);
-  const threads = await asJson<ThreadsByIdResponse>(threadsRes, "GET /threads");
-  const ranges = await asJson<RangesResponse>(rangesRes, "GET /ranges");
-
+export function enrichThreads(
+  threads: ThreadsByIdResponse,
+  ranges: RangesResponse,
+  docPaths: Map<string, string>,
+  full: boolean,
+): EnrichedThread[] {
   // Map thread_id -> {doc_id, op}
   const threadAnchors = new Map<string, { doc_id: string; p: number; c: string }>();
   for (const docRange of ranges) {
@@ -57,11 +55,27 @@ async function fetchThreadsEnriched(projectId: string, docPaths: Map<string, str
       first_author: authorName,
       last_updated: last?.timestamp ?? first?.timestamp,
       preview,
+      full_thread: full ? thread : undefined,
     });
   }
   // Sort by most recently updated.
   out.sort((a, b) => (b.last_updated ?? 0) - (a.last_updated ?? 0));
   return out;
+}
+
+async function fetchThreadsEnriched(
+  projectId: string,
+  docPaths: Map<string, string>,
+  full: boolean,
+): Promise<EnrichedThread[]> {
+  const [threadsRes, rangesRes] = await Promise.all([
+    olGet(`project/${projectId}/threads`),
+    olGet(`project/${projectId}/ranges`),
+  ]);
+  const threads = await asJson<ThreadsByIdResponse>(threadsRes, "GET /threads");
+  const ranges = await asJson<RangesResponse>(rangesRes, "GET /ranges");
+
+  return enrichThreads(threads, ranges, docPaths, full);
 }
 
 const ListSchema = z.object({
@@ -97,15 +111,11 @@ export function registerComments(server: McpServer): void {
       const ap = getActiveProject();
       if (!ap) return { content: [{ type: "text", text: "No project is open. Call open_project first." }], isError: true };
       try {
-        let threads = await fetchThreadsEnriched(ap.projectId, docPathById(ap));
+        let threads = await fetchThreadsEnriched(ap.projectId, docPathById(ap), args.full);
         if (!args.include_resolved) threads = threads.filter((t) => !t.resolved);
         if (args.path_contains) {
           const needle = args.path_contains.toLowerCase();
           threads = threads.filter((t) => (t.doc_path ?? "").toLowerCase().includes(needle));
-        }
-        if (!args.full) {
-          // Strip noisy fields for a leaner LLM payload.
-          threads = threads.map((t) => ({ ...t, full_thread: undefined }));
         }
         return {
           content: [{ type: "text", text: JSON.stringify({ count: threads.length, threads }, null, 2) }],

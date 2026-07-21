@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { summarizeErrors } from "../../src/tools/compile.js";
+import { computeCompileVerification, summarizeErrors } from "../../src/tools/compile.js";
 
 describe("summarizeErrors", () => {
   it("returns zeros for an undefined log", () => {
@@ -59,5 +59,28 @@ describe("summarizeErrors", () => {
     const result = summarizeErrors(log);
     assert.equal(result.error_count, 1);
     assert.equal(result.warnings, 0);
+  });
+});
+
+describe("computeCompileVerification", () => {
+  it("reports clean only when a PDF and parsed log are both available with zero errors", () => {
+    assert.deepEqual(
+      computeCompileVerification({ pdfAvailable: true, logAvailable: true, errorCount: 0 }),
+      { built_cleanly: true, verification_complete: true },
+    );
+  });
+
+  it("fails closed when output.log could not be fetched", () => {
+    assert.deepEqual(
+      computeCompileVerification({ pdfAvailable: true, logAvailable: false, errorCount: 0 }),
+      { built_cleanly: false, verification_complete: false },
+    );
+  });
+
+  it("reports a verified dirty build when the log contains errors", () => {
+    assert.deepEqual(
+      computeCompileVerification({ pdfAvailable: true, logAvailable: true, errorCount: 2 }),
+      { built_cleanly: false, verification_complete: true },
+    );
   });
 });

@@ -54,7 +54,12 @@ try {
   console.error("structured:", JSON.stringify(ok.structured));
 
   // Verdict
-  const recoveredCleanly = !ok.isError && ok.structured?.status === "success" && fail.structured?.status !== "success";
+  const recoveredCleanly =
+    !ok.isError &&
+    ok.structured?.built_cleanly === true &&
+    ok.structured?.verification_complete === true &&
+    fail.structured?.built_cleanly === false &&
+    fail.structured?.verification_complete === true;
   console.error("\n== verdict ==");
   console.error(recoveredCleanly ? "OK — compile loop works: error detected, fixed, recompile succeeded." : "FAIL — see logs above.");
   process.exit(recoveredCleanly ? 0 : 1);

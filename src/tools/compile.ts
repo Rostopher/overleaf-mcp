@@ -35,6 +35,17 @@ export function summarizeErrors(
   return { errors: errors.slice(0, maxErrorLines), error_count: errors.length, warnings };
 }
 
+export function computeCompileVerification(opts: {
+  pdfAvailable: boolean;
+  logAvailable: boolean;
+  errorCount: number;
+}): { built_cleanly: boolean; verification_complete: boolean } {
+  return {
+    built_cleanly: opts.pdfAvailable && opts.logAvailable && opts.errorCount === 0,
+    verification_complete: opts.logAvailable,
+  };
+}
+
 // Build the GET-able URL for an output file from a compile response, including
 // the clsiserverid + compileGroup query params CLSI requires.
 function buildOutputUrl(file: OutputFile, last: CompileResponse): string {
@@ -65,7 +76,7 @@ export function registerCompile(server: McpServer): void {
         "Triggers a LaTeX compile on Overleaf's CLSI, then fetches `output.log` and returns a unified summary: " +
         "status, whether a PDF was produced, error_count (parsed `! `-prefixed log lines), warning_count, first error lines, output file list, timings. " +
         "Note: Overleaf returns status:\"success\" even when LaTeX has errors (PDF is still generated under nonstopmode). " +
-        "The truthful 'did it build cleanly?' check is `error_count === 0`. " +
+        "The truthful 'did it build cleanly?' check is `built_cleanly`, which requires a PDF, a successfully fetched log, and `error_count === 0`. " +
         "Use `read_log` for the full log when more context is needed.",
       inputSchema: Schema.shape,
     },
@@ -91,24 +102,37 @@ export function registerCompile(server: McpServer): void {
         let warningCount = 0;
         let errorLines: string[] = [];
         let logBytes = 0;
+        let logAvailable = false;
+        let logError: string | undefined;
         if (logFile) {
           try {
             const log = await fetchOutputLog(result);
-            if (log) {
+            if (log !== undefined && log.length > 0) {
+              logAvailable = true;
               logBytes = log.length;
               const summarized = summarizeErrors(log);
               errorLines = summarized.errors;
               errorCount = summarized.error_count;
               warningCount = summarized.warnings;
+            } else {
+              logError = "output.log was empty";
             }
           } catch (logErr) {
-            logger.warn("compile: log fetch failed; not fatal", logErr instanceof Error ? logErr.message : logErr);
+            logError = logErr instanceof Error ? logErr.message : String(logErr);
+            logger.warn("compile: log fetch failed; build cleanliness is unverified", logError);
           }
         }
+        const verification = computeCompileVerification({
+          pdfAvailable: Boolean(pdf),
+          logAvailable,
+          errorCount,
+        });
         const summary = {
           status: result.status ?? "unknown",
-          built_cleanly: errorCount === 0 && Boolean(pdf),
+          ...verification,
           pdf_available: Boolean(pdf),
+          log_available: logAvailable,
+          log_error: logError,
           error_count: errorCount,
           warning_count: warningCount,
           first_errors: errorLines.slice(0, 5),
@@ -119,6 +143,8 @@ export function registerCompile(server: McpServer): void {
         };
         const headline = summary.built_cleanly
           ? `Built cleanly. PDF produced, 0 LaTeX errors.`
+          : !summary.verification_complete && pdf
+            ? `PDF produced, but output.log could not be verified; build cleanliness is unknown.`
           : errorCount > 0
             ? `LaTeX errors detected (${errorCount}). ${pdf ? "Partial PDF produced." : "No PDF."} First error: ${errorLines[0] ?? "(see read_log)"}`
             : !pdf

@@ -1,7 +1,7 @@
 {
-  "name": "@netique/overleaf-mcp",
+  "name": "overleaf-cli",
   "version": "0.3.5",
-  "description": "MCP server for Overleaf with tracked-changes support, via the Socket.IO web API (not the Git bridge).",
+  "description": "CLI + MCP for Overleaf: read docs, list/reply/resolve review comments, inspect tracked changes, compile — via the Socket.IO web API (not the Git bridge).",
   "type": "module",
   "bin": {
     "overleaf-mcp": "./dist/index.js",

@@ -18,12 +18,13 @@ import { maybeRunCli } from "./auth/cli.js";
 import { runCli } from "./cli.js";
 import { logger } from "./util/logger.js";
 
-const SERVER_NAME = "overleaf-mcp";
+const SERVER_NAME = "overleaf-cli";
 // Read once from the published package.json so a release bump can never
 // desync from what the MCP handshake reports. Works in both `tsx` (src/)
 // and the built layout (dist/) because the file is one level above each.
+import { createRequire } from "node:module";
 const SERVER_VERSION = (
-  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
+  createRequire(import.meta.url)("../package.json") as { version: string }
 ).version;
 
 const INSTRUCTIONS = [

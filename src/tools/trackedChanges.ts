@@ -22,7 +22,7 @@ export interface FlatChange {
   timestamp?: string;
 }
 
-function memberMap(ap: NonNullable<ReturnType<typeof getActiveProject>>): Map<string, { name?: string; email?: string }> {
+export function memberMap(ap: NonNullable<ReturnType<typeof getActiveProject>>): Map<string, { name?: string; email?: string }> {
   const m = new Map<string, { name?: string; email?: string }>();
   const add = (u: MemberEntity | undefined) => {
     if (!u?._id) return;
@@ -34,12 +34,12 @@ function memberMap(ap: NonNullable<ReturnType<typeof getActiveProject>>): Map<st
   return m;
 }
 
-async function fetchAllRanges(projectId: string): Promise<RangesResponse> {
+export async function fetchAllRanges(projectId: string): Promise<RangesResponse> {
   const res = await olGet(`project/${projectId}/ranges`);
   return await asJson<RangesResponse>(res, "GET /ranges");
 }
 
-function flattenChanges(
+export function flattenChanges(
   ranges: RangesResponse,
   pathMap: Map<string, string>,
   members: Map<string, { name?: string; email?: string }>,
@@ -87,7 +87,7 @@ const AcceptSchema = z.object({
   change_ids: z.array(z.string().min(8)).min(1).describe("Tracked-change ids to accept (from list_tracked_changes)."),
 });
 
-async function postAccept(projectId: string, docId: string, changeIds: string[]): Promise<void> {
+export async function postAccept(projectId: string, docId: string, changeIds: string[]): Promise<void> {
   const res = await olPostJson(`project/${projectId}/doc/${docId}/changes/accept`, { change_ids: changeIds });
   await expectOk(res, `POST project/${projectId}/doc/${docId}/changes/accept`);
 }
@@ -107,7 +107,7 @@ export function buildRejectOps(changes: FlatChange[]): Array<{ p: number; i?: st
   );
 }
 
-async function rejectViaOt(docId: string, changes: FlatChange[]): Promise<void> {
+export async function rejectViaOt(docId: string, changes: FlatChange[]): Promise<void> {
   const ops = buildRejectOps(changes);
   // We don't keep a cache for arbitrary docs (only ones the agent has edited),
   // so fetch the current version straight from the server before sending the

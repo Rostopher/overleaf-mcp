@@ -15,6 +15,7 @@ import { registerComments } from "./tools/comments.js";
 import { registerTrackedChanges } from "./tools/trackedChanges.js";
 import { close as closeActiveProject } from "./session/activeProject.js";
 import { maybeRunCli } from "./auth/cli.js";
+import { runCli } from "./cli.js";
 import { logger } from "./util/logger.js";
 
 const SERVER_NAME = "overleaf-mcp";
@@ -92,7 +93,19 @@ async function main(): Promise<void> {
 }
 
 maybeRunCli(process.argv)
-  .then(() => main())
+  .then(async (handled) => {
+    if (handled) return;
+    // CLI mode: any argv[2] that isn't an auth subcommand and isn't a known
+    // MCP-server flag drops into the subcommand dispatcher. Bare
+    // `overleaf-mcp` (no args) still boots the stdio MCP server.
+    const sub = process.argv[2];
+    const mcpFlags = new Set(["--stdio", "serve", "server", "mcp"]);
+    if (sub !== undefined && !mcpFlags.has(sub)) {
+      const code = await runCli(process.argv);
+      process.exit(code);
+    }
+    await main();
+  })
   .catch((err: unknown) => {
     logger.error("fatal startup error", err instanceof Error ? err.stack ?? err.message : err);
     process.exit(1);

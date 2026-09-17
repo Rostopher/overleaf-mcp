@@ -58,13 +58,74 @@ function buildOutputUrl(file: OutputFile, last: CompileResponse): string {
   return qs ? `${base}${sep}${qs}` : base;
 }
 
-async function fetchOutputLog(last: CompileResponse): Promise<string | undefined> {
+export async function fetchOutputLog(last: CompileResponse): Promise<string | undefined> {
   const logFile = last.outputFiles?.find((f) => f.path === "output.log");
   if (!logFile) return undefined;
   const path = buildOutputUrl(logFile, last);
   const res = await olGet(path);
   await expectOk(res, `GET ${path}`);
   return await res.text();
+}
+
+export async function runCompile(
+  projectId: string,
+  opts: { root_doc?: string; draft?: boolean; stop_on_first_error?: boolean },
+): Promise<{ result: CompileResponse; summary: Record<string, unknown> }> {
+  const body = {
+    check: "silent",
+    draft: opts.draft ?? false,
+    incrementalCompilesEnabled: true,
+    rootResourcePath: opts.root_doc ?? null,
+    stopOnFirstError: opts.stop_on_first_error ?? false,
+  };
+  const res = await olPostJson(`project/${projectId}/compile?auto_compile=true`, body);
+  const result = await asJson<CompileResponse>(res, `POST project/${projectId}/compile`);
+  const pdf = result.outputFiles?.find((f) => f.path === "output.pdf");
+  const logFile = result.outputFiles?.find((f) => f.path === "output.log");
+  let errorCount = 0;
+  let warningCount = 0;
+  let errorLines: string[] = [];
+  let logBytes = 0;
+  let logAvailable = false;
+  let logError: string | undefined;
+  if (logFile) {
+    try {
+      const log = await fetchOutputLog(result);
+      if (log !== undefined && log.length > 0) {
+        logAvailable = true;
+        logBytes = log.length;
+        const summarized = summarizeErrors(log);
+        errorLines = summarized.errors;
+        errorCount = summarized.error_count;
+        warningCount = summarized.warnings;
+      } else {
+        logError = "output.log was empty";
+      }
+    } catch (logErr) {
+      logError = logErr instanceof Error ? logErr.message : String(logErr);
+      logger.warn("compile: log fetch failed; build cleanliness is unverified", logError);
+    }
+  }
+  const verification = computeCompileVerification({
+    pdfAvailable: Boolean(pdf),
+    logAvailable,
+    errorCount,
+  });
+  const summary: Record<string, unknown> = {
+    status: result.status ?? "unknown",
+    ...verification,
+    pdf_available: Boolean(pdf),
+    log_available: logAvailable,
+    log_error: logError,
+    error_count: errorCount,
+    warning_count: warningCount,
+    first_errors: errorLines.slice(0, 5),
+    log_bytes: logBytes,
+    compile_time_ms: result.timings?.compile,
+    total_time_ms: result.timings?.compileE2E,
+    output_files: (result.outputFiles ?? []).map((f) => f.path),
+  };
+  return { result, summary };
 }
 
 export function registerCompile(server: McpServer): void {
@@ -86,61 +147,16 @@ export function registerCompile(server: McpServer): void {
         return { content: [{ type: "text", text: "No project is open. Call open_project first." }], isError: true };
       }
       try {
-        const body = {
-          check: "silent",
+        const { result, summary } = await runCompile(ap.projectId, {
+          root_doc: args.root_doc,
           draft: args.draft,
-          incrementalCompilesEnabled: true,
-          rootResourcePath: args.root_doc ?? null,
-          stopOnFirstError: args.stop_on_first_error,
-        };
-        const res = await olPostJson(`project/${ap.projectId}/compile?auto_compile=true`, body);
-        const result = await asJson<CompileResponse>(res, `POST project/${ap.projectId}/compile`);
+          stop_on_first_error: args.stop_on_first_error,
+        });
         setLastCompile(result);
         const pdf = result.outputFiles?.find((f) => f.path === "output.pdf");
-        const logFile = result.outputFiles?.find((f) => f.path === "output.log");
-        let errorCount = 0;
-        let warningCount = 0;
-        let errorLines: string[] = [];
-        let logBytes = 0;
-        let logAvailable = false;
-        let logError: string | undefined;
-        if (logFile) {
-          try {
-            const log = await fetchOutputLog(result);
-            if (log !== undefined && log.length > 0) {
-              logAvailable = true;
-              logBytes = log.length;
-              const summarized = summarizeErrors(log);
-              errorLines = summarized.errors;
-              errorCount = summarized.error_count;
-              warningCount = summarized.warnings;
-            } else {
-              logError = "output.log was empty";
-            }
-          } catch (logErr) {
-            logError = logErr instanceof Error ? logErr.message : String(logErr);
-            logger.warn("compile: log fetch failed; build cleanliness is unverified", logError);
-          }
-        }
-        const verification = computeCompileVerification({
-          pdfAvailable: Boolean(pdf),
-          logAvailable,
-          errorCount,
-        });
-        const summary = {
-          status: result.status ?? "unknown",
-          ...verification,
-          pdf_available: Boolean(pdf),
-          log_available: logAvailable,
-          log_error: logError,
-          error_count: errorCount,
-          warning_count: warningCount,
-          first_errors: errorLines.slice(0, 5),
-          log_bytes: logBytes,
-          compile_time_ms: result.timings?.compile,
-          total_time_ms: result.timings?.compileE2E,
-          output_files: (result.outputFiles ?? []).map((f) => f.path),
-        };
+        const errorCount = summary.error_count as number;
+        const warningCount = summary.warning_count as number;
+        const errorLines = summary.first_errors as string[];
         const headline = summary.built_cleanly
           ? `Built cleanly. PDF produced, 0 LaTeX errors.`
           : !summary.verification_complete && pdf

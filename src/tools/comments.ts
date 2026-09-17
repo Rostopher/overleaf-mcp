@@ -63,7 +63,7 @@ export function enrichThreads(
   return out;
 }
 
-async function fetchThreadsEnriched(
+export async function fetchThreadsEnriched(
   projectId: string,
   docPaths: Map<string, string>,
   full: boolean,
@@ -94,6 +94,22 @@ const ThreadIdSchema = z.object({
 const ReplySchema = ThreadIdSchema.extend({
   content: z.string().min(1).describe("The reply text to post in the thread."),
 });
+
+export async function postThreadReply(projectId: string, threadId: string, content: string): Promise<void> {
+  const res = await olPostJson(`project/${projectId}/thread/${threadId}/messages`, { content });
+  await expectOk(res, `POST /thread/${threadId}/messages`);
+}
+
+export async function postThreadResolve(projectId: string, threadId: string, resolved: boolean): Promise<void> {
+  const action = resolved ? "resolve" : "reopen";
+  const res = await olPostJson(`project/${projectId}/thread/${threadId}/${action}`, {});
+  await expectOk(res, `POST /thread/${threadId}/${action}`);
+}
+
+export async function fetchThreadsById(projectId: string): Promise<ThreadsByIdResponse> {
+  const r = await olGet(`project/${projectId}/threads`);
+  return await asJson<ThreadsByIdResponse>(r, "GET /threads");
+}
 
 export function registerComments(server: McpServer): void {
   server.registerTool(

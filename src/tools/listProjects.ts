@@ -9,7 +9,7 @@ interface ProjectsResponse {
   projects?: RawProject[];
 }
 
-async function fetchProjects(): Promise<ProjectSummary[]> {
+export async function fetchProjects(): Promise<ProjectSummary[]> {
   // POST /api/project is the dashboard XHR — returns lastUpdated, owner, etc.
   // GET /user/projects exists on older / self-hosted Overleaf but returns a
   // minimal payload (id + name + accessLevel only). Prefer the rich endpoint.
